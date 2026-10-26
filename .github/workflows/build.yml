@@ -12,15 +12,172 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.14.3
-      - name: Find project folder
-        id: find
-        run: echo "dir=$(dirname "$(find . -name build.gradle -not -path './.git/*' | head -n1)")" >> "$GITHUB_OUTPUT"
+      - name: Create project files
+        run: |
+          cat > settings.gradle <<'EOF_FILE'
+          pluginManagement {
+              repositories {
+                  maven { url = 'https://maven.fabricmc.net/' }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          EOF_FILE
+          cat > gradle.properties <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx2G
+          minecraft_version=1.21.11
+          yarn_mappings=1.21.11+build.3
+          loader_version=0.18.2
+          fabric_version=0.139.4+1.21.11
+          mod_version=1.0.0
+          EOF_FILE
+          cat > build.gradle <<'EOF_FILE'
+          plugins {
+              id 'fabric-loom' version '1.14-SNAPSHOT'
+          }
+
+          version = project.mod_version
+          group = 'com.realfps'
+          base { archivesName = 'real-fps-menu' }
+
+          repositories {}
+
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+          }
+
+          java {
+              sourceCompatibility = JavaVersion.VERSION_21
+              targetCompatibility = JavaVersion.VERSION_21
+              withSourcesJar()
+          }
+
+          tasks.withType(JavaCompile).configureEach { options.release = 21 }
+          EOF_FILE
+          mkdir -p src/main/resources
+          cat > src/main/resources/fabric.mod.json <<'EOF_FILE'
+          {
+            "schemaVersion": 1,
+            "id": "realfpsmenu",
+            "version": "${version}",
+            "name": "Real FPS Menu",
+            "description": "Press G to open a menu with your real FPS. Works alongside any FPS mod.",
+            "environment": "client",
+            "entrypoints": { "client": ["com.realfps.RealFpsClient"] },
+            "depends": {
+              "fabricloader": ">=0.16.0",
+              "minecraft": ">=1.21.9",
+              "java": ">=21",
+              "fabric-api": "*"
+            }
+          }
+          EOF_FILE
+          mkdir -p src/main/resources/assets/realfps/lang
+          cat > src/main/resources/assets/realfps/lang/en_us.json <<'EOF_FILE'
+          {
+            "key.realfps.menu": "Open Real FPS Menu",
+            "key.category.realfps.main": "Real FPS"
+          }
+          EOF_FILE
+          mkdir -p src/main/java/com/realfps
+          cat > src/main/java/com/realfps/RealFpsClient.java <<'EOF_FILE'
+          package com.realfps;
+
+          import net.fabricmc.api.ClientModInitializer;
+          import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+          import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+          import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+          import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
+          import net.minecraft.client.option.KeyBinding;
+          import net.minecraft.client.util.InputUtil;
+          import net.minecraft.util.Identifier;
+          import org.lwjgl.glfw.GLFW;
+
+          public class RealFpsClient implements ClientModInitializer {
+              private static KeyBinding menuKey;
+
+              // Our own frame counter, so other FPS mods can't change what we read.
+              private static int frames = 0;
+              private static long windowStart = System.nanoTime();
+              private static int realFps = 0;
+
+              public static int getRealFps() {
+                  return realFps;
+              }
+
+              private static void countFrame() {
+                  frames++;
+                  long now = System.nanoTime();
+                  long elapsed = now - windowStart;
+                  if (elapsed >= 500_000_000L) {
+                      realFps = (int) Math.round(frames * 1_000_000_000.0 / elapsed);
+                      frames = 0;
+                      windowStart = now;
+                  }
+              }
+
+              @Override
+              public void onInitializeClient() {
+                  KeyBinding.Category category = KeyBinding.Category.create(Identifier.of("realfps", "main"));
+                  menuKey = KeyBindingHelper.registerKeyBinding(
+                          new KeyBinding("key.realfps.menu", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_G, category));
+
+                  ClientTickEvents.END_CLIENT_TICK.register(client -> {
+                      while (menuKey.wasPressed()) {
+                          if (client.currentScreen == null) {
+                              client.setScreen(new RealFpsScreen());
+                          } else if (client.currentScreen instanceof RealFpsScreen) {
+                              client.setScreen(null);
+                          }
+                      }
+                  });
+
+                  // Counts every rendered frame in-game (draws nothing).
+                  HudElementRegistry.attachElementAfter(
+                          VanillaHudElements.MISC_OVERLAYS,
+                          Identifier.of("realfps", "counter"),
+                          (context, tickCounter) -> countFrame());
+              }
+          }
+          EOF_FILE
+          mkdir -p src/main/java/com/realfps
+          cat > src/main/java/com/realfps/RealFpsScreen.java <<'EOF_FILE'
+          package com.realfps;
+
+          import net.minecraft.client.gui.DrawContext;
+          import net.minecraft.client.gui.screen.Screen;
+          import net.minecraft.text.Text;
+
+          public class RealFpsScreen extends Screen {
+              public RealFpsScreen() {
+                  super(Text.literal("Real FPS"));
+              }
+
+              @Override
+              public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+                  super.render(context, mouseX, mouseY, delta);
+                  int cx = this.width / 2;
+                  int cy = this.height / 2;
+                  context.fill(cx - 80, cy - 34, cx + 80, cy + 34, 0xC0000000);
+                  context.drawCenteredTextWithShadow(this.textRenderer, "Real FPS", cx, cy - 22, 0xFFFFFFFF);
+                  context.drawCenteredTextWithShadow(this.textRenderer, String.valueOf(RealFpsClient.getRealFps()), cx, cy - 6, 0xFF55FFFF);
+                  context.drawCenteredTextWithShadow(this.textRenderer, "ESC to close", cx, cy + 14, 0xFFAAAAAA);
+              }
+
+              @Override
+              public boolean shouldPause() {
+                  return false;
+              }
+          }
+          EOF_FILE
       - name: Build
         run: gradle build
-        working-directory: ${{ steps.find.outputs.dir }}
       - uses: actions/upload-artifact@v4
         with:
           name: real-fps-menu
           path: |
-            ${{ steps.find.outputs.dir }}/build/libs/*.jar
-            !${{ steps.find.outputs.dir }}/build/libs/*-sources.jar
+            build/libs/*.jar
+            !build/libs/*-sources.jar
