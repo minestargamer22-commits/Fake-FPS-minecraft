@@ -20,7 +20,7 @@ jobs:
         working-directory: ${{ steps.find.outputs.dir }}
       - uses: actions/upload-artifact@v4
         with:
-          name: fake-fps
+          name: real-fps-menu
           path: |
             ${{ steps.find.outputs.dir }}/build/libs/*.jar
             !${{ steps.find.outputs.dir }}/build/libs/*-sources.jar
